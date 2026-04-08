@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Aurora Borealis</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js";
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: "high-performance"
+});
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+const sharedUniforms = {
+  u_time: { value: 0 },
+  u_resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+};
+
+const backgroundPlane = new THREE.PlaneGeometry(2, 2);
+const backgroundMaterial = new THREE.ShaderMaterial({
+  uniforms: sharedUniforms,
+  depthTest: false,
+  depthWrite: false,
+  transparent: false,
+  vertexShader: `
+    varying vec2 v_uv;
+    void main() {
+      v_uv = uv;
+      gl_Position = vec4(position.xy, 0.0, 1.0);
+    }
+  `,
+  fragmentShader: `
+    precision highp float;
+    uniform float u_time;
+    uniform vec2 u_resolution;
+    varying vec2 v_uv;
+
+    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+    float snoise(vec3 v) {
+      const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+      const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+
+      vec3 i  = floor(v + dot(v, C.yyy));
+      vec3 x0 = v - i + dot(i, C.xxx);
+
+      vec3 g = step(x0.yzx, x0.xyz);
+      vec3 l = 1.0 - g;
+      vec3 i1 = min(g.xyz, l.zxy);
+      vec3 i2 = max(g.xyz, l.zxy);
+
+      vec3 x1 = x0 - i1 + C.xxx;
+      vec3 x2 = x0 - i2 + C.yyy;
+      vec3 x3 = x0 - D.yyy;
+
+      i = mod289(i);
+      vec4 p = permute(permute(permute(i.z + vec4(0.0, i1.z, i2.z, 1.0)) + i.y + vec4(0.0, i1.y, i2.y, 1.0)) + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+      float n_ = 0.142857142857;
+      vec3  ns = n_ * D.wyz - D.xzx;
+
+      vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+
+      vec4 x_ = floor(j * ns.z);
+      vec4 y_ = floor(j - 7.0 * x_);
+
+      vec4 x = x_ * ns.x + ns.yyyy;
+      vec4 y = y_ * ns.x + ns.yyyy;
+      vec4 h = 1.0 - abs(y) - abs(x);
+
+      vec4 b0 = vec4(x.xy, y.xy);
+      vec4 b1 = vec4(x.zw, y.zw);
+
+      vec4 s0 = floor(b0) * 2.0 + 1.0;
+      vec4 s1 = floor(b1) * 2.0 + 1.0;
+      vec4 sh = -step(h, vec4(0.0));
+
+      vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+      vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+
+      vec3 p0 = vec3(a0.xy, h.x);
+      vec3 p1 = vec3(a0.zw, h.y);
+      vec3 p2 = vec3(a1.xy, h.z);
+      vec3 p3 = vec3(a1.zw, h.w);
+
+      vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+      p0 *= norm.x;
+      p1 *= norm.y;
+      p2 *= norm.z;
+      p3 *= norm.w;
+
+      vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+      m = m * m;
+      return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+    }
+
+    float fbm(vec3 p) {
+      float value = 0.0;
+      float amp = 0.5;
+      for (int i = 0; i < 4; i++) {
+        value += amp * snoise(p);
+        p *= 2.02;
+        amp *= 0.5;
+      }
+      return value;
+    }
+
+    float hash12(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.x + p3.y) * p3.z);
+    }
+
+    vec3 auroraColor(float t) {
+      vec3 c1 = vec3(0.50, 0.97, 0.78);
+      vec3 c2 = vec3(0.58, 0.70, 1.00);
+      vec3 c3 = vec3(1.00, 0.70, 0.88);
+      vec3 c = mix(c1, c2, smoothstep(0.15, 0.85, t));
+      c = mix(c, c3, smoothstep(0.65, 1.00, t));
+      return mix(c, vec3(1.0), 0.38);
+    }
+
+    void main() {
+      vec2 uv = v_uv;
+      vec2 aspect = vec2(u_resolution.x / u_resolution.y, 1.0);
+      vec2 p = (uv - 0.5) * aspect;
+
+      float t = u_time * 0.08;
+
+      float w1 = fbm(vec3(p * 0.90, t));
+      float w2 = fbm(vec3(p * 0.90 + 2.1, t * 1.12));
+      vec2 q = p + vec2(w1, w2) * 0.32;
+
+      float diag = dot(normalize(vec2(0.50, 0.86)), q);
+      float hue = 0.5 + 0.5 * sin(diag * 2.1 + t * 1.3 + fbm(vec3(q * 1.25, t * 0.8)));
+      vec3 aurCol = auroraColor(hue);
+
+      float curtains = 0.0;
+      for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float scale = mix(0.75, 1.75, fi / 3.0);
+
+        float x = q.x * (1.15 + 0.20 * fi) + t * (0.75 + 0.20 * fi);
+        float curve = 0.22 * sin(x * 1.1) + 0.35 * fbm(vec3(q * scale + vec2(fi * 3.1, -fi * 2.7), t * 0.95 + fi * 9.0));
+        float centerY = curve * 0.55 + 0.06 - fi * 0.06;
+
+        float width = 0.20 + 0.11 * fi;
+        float d = abs(q.y - centerY);
+        float band = exp(-d * (7.0 / width));
+
+        float shimmer = 0.55 + 0.45 * fbm(vec3(vec2(q.x * 3.3, q.y * 1.4) * scale, t * 2.6 + fi * 5.0));
+        float edgeSoft = smoothstep(0.0, 1.0, 1.0 - d / (width * 2.5));
+        curtains += band * shimmer * edgeSoft;
+      }
+
+      float verticalMask = smoothstep(-0.75, 0.25, q.y) * (1.0 - smoothstep(0.05, 0.95, q.y));
+      float glow = clamp(curtains * verticalMask, 0.0, 1.0);
+
+      vec3 base = vec3(0.96, 0.94, 0.90);
+      vec3 col = base;
+      col = mix(col, aurCol, glow * 0.92);
+      col += aurCol * (glow * glow) * 0.85;
+
+      float haze = fbm(vec3(q * 0.70 + vec2(0.0, t * 0.4), t * 0.6));
+      col = mix(col, base, (1.0 - glow) * (0.20 + 0.18 * haze));
+
+      float v = smoothstep(0.95, 0.35, length(uv - 0.5));
+      col *= 0.95 + 0.10 * v;
+
+      float grain = (hash12(uv * u_resolution.xy + fract(u_time)) - 0.5) * 0.025;
+      col += grain;
+
+      col = pow(max(col, 0.0), vec3(1.04));
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+});
+const backgroundMesh = new THREE.Mesh(backgroundPlane, backgroundMaterial);
+backgroundMesh.frustumCulled = false;
+scene.add(backgroundMesh);
+
+function animate(nowMs) {
+  const timeS = nowMs * 0.001;
+  sharedUniforms.u_time.value = timeS;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+
+requestAnimationFrame(animate);
+
+window.addEventListener("resize", () => {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  sharedUniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
